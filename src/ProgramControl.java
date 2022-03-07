@@ -17,6 +17,20 @@ public class ProgramControl {
         return sb.toString();
     }
 
+//    public static void initSuperServers() {
+//        for(int i = 0; i < 10; i ++) {
+//            int superPeerId = 20000 + 1 + i;
+//            int port = superPeerId + 10000;
+//            String neibors = Constant.SUPER_PEER_NEIGHBORS_CONFIG[i];
+//            String logPath = Constant.BASE_DIR + "SuperPeers\\SuperPeer-" + superPeerId + ".log";
+//
+//            String command = "java -jar " + System.getProperty("user.dir") + "\\out\\artifacts\\SuperPeer_jar\\GnutellaP2P.jar " +
+//                    superPeerId + " " + port + " " + neibors ;
+//
+//            execCommand(command, logPath);
+//        }
+//    }
+
     public static void initSuperServers() {
         for(int i = 0; i < 10; i ++) {
             int superPeerId = 20000 + 1 + i;
@@ -24,10 +38,17 @@ public class ProgramControl {
             String neibors = Constant.SUPER_PEER_NEIGHBORS_CONFIG[i];
             String logPath = Constant.BASE_DIR + "SuperPeers\\SuperPeer-" + superPeerId + ".log";
 
-            String command = "java -jar " + System.getProperty("user.dir") + "\\out\\artifacts\\SuperPeer_jar\\p2p.jar " +
-                    superPeerId + " " + port + " " + neibors ;
+            System.out.println("SuperPeer-" + superPeerId + " port: " + port + " init service, neibors: " + neibors);
 
-            execCommand(command, logPath);
+            new Thread(() -> {
+                try {
+                    (new SuperPeer(superPeerId, port, neibors)).init_service();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }).start();
+
+
         }
     }
 
@@ -37,13 +58,33 @@ public class ProgramControl {
             int leafId = 10000 + 2 * i + 1;
             String logPath = Constant.BASE_DIR + "LeafNodes\\LeafNode-" + leafId + ".log";
 
-            String command = "java -jar " + System.getProperty("user.dir") + "\\out\\artifacts\\LeafNode_jar\\p2p.jar " +
-                    superPeerPort;
+            System.out.println("LeafNode-" + leafId + " port: " + (leafId + 1) + " start, superPeerPort: " + superPeerPort);
 
-            execCommand(command, logPath);
+
+            new Thread(() -> {
+                try {
+                    (new LeafNode(leafId, leafId+1, superPeerPort)).leafNodeStart("passivity");
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }).start();
 
         }
     }
+
+//    public static void initLeafNodes() {
+//        for(int i = 0; i < 9; i ++) {
+//            int superPeerPort = i + 30000 + 1 ;
+//            int leafId = 10000 + 2 * i + 1;
+//            String logPath = Constant.BASE_DIR + "LeafNodes\\LeafNode-" + leafId + ".log";
+//
+//            String command = "java -jar " + System.getProperty("user.dir") + "\\out\\artifacts\\LeafNode_jar\\GnutellaP2P.jar " +
+//                    superPeerPort;
+//
+//            execCommand(command, logPath);
+//
+//        }
+//    }
 
     public static void execCommand(String command, String outputPath) {
         try {

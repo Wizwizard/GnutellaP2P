@@ -43,79 +43,21 @@ public class Tool {
         }
     }
 
-    public static void CentralServerSearchTesting() throws MalformedURLException, NotBoundException, RemoteException {
-        CentralService centralService = (CentralService) Naming.lookup(
-                Constant.CENTRAL_RMI_ADDRESS + Constant.SERVER_PORT + "/service");
+    public static void LeafNodeDownloadPerformanceTesting() throws RemoteException {
+        LeafNode leafNode = new LeafNode(10061, 10062, 30010);
+        leafNode.leafNodeStart("passivity");
+        String messageID = "10061";
+        int sequenceNumber = 0;
+        String filename = "j";
+        System.out.println("Download start at " + System.currentTimeMillis());
 
-        int[] lvs = {1000, 10000, 20000};
-        long startTime;
-        long endTime;
-        double avgTime;
-        int i;
-
-        // generate the index firstly
-        for (i = 0; i < 100; i ++) {
-            centralService.registry(i, "fixedFile");
-        }
-
-        for (int j = 0; j < lvs.length; j ++) {
-            ExecutorService executorService = Executors.newFixedThreadPool(lvs[j]);
-            startTime = System.currentTimeMillis();
-            for (i = 0; i < lvs[j]; i ++) {
-                executorService.submit(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            centralService.search("fixedFile");
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-                    }
-                });
-            }
-            executorService.shutdown();
-            endTime = System.currentTimeMillis();
-            avgTime = (endTime - startTime) / (lvs[j] / lvs[0]);
-            System.out.println("Request start at " + startTime +
-                    " Request end at " + endTime +
-                    " Request number:" + lvs[j] +
-                    " avgTime: " + avgTime +"ms");
+        for(int i = 0; i < 200; i ++ ){
+            leafNode.currentDownloadingNumber.incrementAndGet();
+            leafNode.superPeerService.query(messageID + i, String.valueOf(leafNode.leafId), Constant.TTL,
+                    (10000 + 1 + 2 * (i % 9)) + filename);
         }
     }
 
-    public static void PeerRetrieveTesting() throws MalformedURLException, NotBoundException, RemoteException {
-        PeerService peerService = (PeerService) Naming.lookup(
-                Constant.CENTRAL_RMI_ADDRESS + 10002 + "/service"
-        ) ;
-
-        int[] lvs = {1000, 10000, 20000};
-        long startTime;
-        long endTime;
-        double avgTime;
-        int i;
-
-        for (int j = 0; j < lvs.length; j ++) {
-            ExecutorService executorService = Executors.newFixedThreadPool(lvs[j]);
-            startTime = System.currentTimeMillis();
-            for (i = 0; i < lvs[j]; i ++) {
-                executorService.submit(() -> {
-                    try {
-                        // 6M size file
-                        peerService.retrieve("test.jpg");
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                });
-            }
-            executorService.shutdown();
-            endTime = System.currentTimeMillis();
-            avgTime = (endTime - startTime) / (lvs[j] / lvs[0]);
-            System.out.println("Request start at " + startTime +
-                    " Request end at " + endTime +
-                    " Request number:" + lvs[j] +
-                    " avgTime: " + avgTime +"ms");
-        }
-    }
 
     public static void main(String args[]) {
         // generate files with different size for testing
@@ -130,7 +72,7 @@ public class Tool {
 
         // batch testing of Peer retrieve service
         try {
-            batchGenerateFile();
+            LeafNodeDownloadPerformanceTesting();
         } catch (Exception e) {
             e.printStackTrace();
         }

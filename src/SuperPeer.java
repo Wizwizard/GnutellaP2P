@@ -13,6 +13,7 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
     int superPeerId;
     int port;
 
+
     String logPath;
 
     SuperPeer(int superPeerId, int port, String neighborSuperPeers) throws RemoteException {
@@ -21,7 +22,7 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
         this.port = port;
         neighborSuperPeerList = new ArrayList<>();
         for(String neighborSuperPeer: neighborSuperPeers.split("-")) {
-            neighborSuperPeerList.add(Integer.parseInt(neighborSuperPeer));
+            neighborSuperPeerList.add(30000 + Integer.parseInt(neighborSuperPeer));
         }
 
         this.logPath = Constant.BASE_DIR + "SuperPeers\\" + "SuperPeer-" + this.superPeerId + ".log";
@@ -38,7 +39,7 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
             fileIndexMap.put(fileName, new ArrayList<>());
         if(!fileIndexMap.get(fileName).contains(peerId)) {
             fileIndexMap.get(fileName).add(peerId);
-            System.out.println("Leaf-" + peerId + " registered file " + fileName);
+            System.out.println("Leaf-" + peerId + " registered file " + fileName + " on SuperPeer-" + this.superPeerId);
         }
 
         // Success
@@ -66,24 +67,31 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
         // TO-DO delete when oversize
 
         SuperPeerService superPeerService = null;
+        LeafNodeService leafNodeService = null;
 
         if (fileIndexMap.containsKey(fileName)) {
             int leafID = fileIndexMap.get(fileName).get(0);
             try {
-                superPeerService = (SuperPeerService) Naming.lookup(
-                        Constant.SERVER_ADDRESS + (upstreamID + 1) + "/service");
+                if (Integer.parseInt(upstreamID) < 20000) {
+                    leafNodeService = (LeafNodeService) Naming.lookup(
+                            Constant.SERVER_RMI_ADDRESS + (Integer.parseInt(upstreamID) + 1) + "/service");
+                    leafNodeService.queryHit(messageID, TTL, fileName, String.valueOf(leafID), leafID + 1);
+
+                    System.out.println(this.superPeerId + " queryHit " + fileName + " on "+ leafID + " and send back to leafId:" + upstreamID);
+
+                } else {
+                    superPeerService = (SuperPeerService) Naming.lookup(
+                            Constant.SERVER_RMI_ADDRESS + (Integer.parseInt(upstreamID) + 10000) + "/service");
+                    superPeerService.queryHit(messageID, Constant.TTL, fileName,
+                            String.valueOf(leafID), leafID + 1);
+
+                    System.out.println(this.superPeerId + " queryHit " + fileName + " on "+ leafID + " and send back to upstreamID:" + upstreamID);
+
+                }
             } catch (Exception e) {
                 e.printStackTrace();
-            }
-            // port = id + 1
-            if( superPeerService == null ) {
-                // something error cause connect service failed
                 return -1;
             }
-            superPeerService.queryHit(messageID, Constant.TTL, fileName,
-                    String.valueOf(leafID), leafID + 1);
-
-            System.out.println(this.superPeerId + " queryHit " + fileName + " on "+ leafID + " and send back to upstreamPort:" + upstreamID);
 
             return 0;
         } else {
@@ -96,12 +104,13 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
             for(int neighborPort : neighborSuperPeerList) {
                 try {
                     superPeerService = (SuperPeerService) Naming.lookup(
-                            Constant.SERVER_ADDRESS + (neighborPort) + "/service");
+                            Constant.SERVER_RMI_ADDRESS + (neighborPort) + "/service");
+
+                    System.out.println(this.superPeerId + " broadcast query to port:" + neighborPort);
 
 
                     superPeerService.query(messageID, String.valueOf(this.superPeerId), TTL, fileName);
 
-                    System.out.println(this.superPeerId + " broadcast query to port:" + neighborPort);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -122,11 +131,25 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
         }
         try {
             int upstreamPort = Integer.parseInt(messagePairMap.get(messageID)) + 1;
-            superPeerService = (SuperPeerService) Naming.lookup(
-                    Constant.SERVER_ADDRESS + upstreamPort + "/service"
-            );
-            superPeerService.queryHit(messageID, TTL - 1, fileName, leafNodeIP, port_number);
-            System.out.println(this.superPeerId + " receive queryHit " + fileName + " on "+ leafNodeIP + " and send back to upstreamPort:" + upstreamPort);
+
+            if (upstreamPort < 20000) {
+                LeafNodeService leafNodeService = (LeafNodeService) Naming.lookup(
+                        Constant.SERVER_RMI_ADDRESS + upstreamPort + "/service");
+                System.out.println(this.superPeerId + " receive queryHit " + fileName + " on "+ leafNodeIP + " and send back to leafId:" + (upstreamPort-1));
+                leafNodeService.queryHit(messageID, TTL, fileName, leafNodeIP, port_number);
+
+
+
+            } else {
+                superPeerService = (SuperPeerService) Naming.lookup(
+                        Constant.SERVER_RMI_ADDRESS + (upstreamPort + 9999) + "/service");
+                System.out.println(this.superPeerId + " receive queryHit " + fileName + " on "+ leafNodeIP + " and send back to upstreamID:" + (upstreamPort-1));
+
+                superPeerService.queryHit(messageID, Constant.TTL, fileName,
+                        leafNodeIP, port_number);
+
+
+            }
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -136,7 +159,7 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
         return 0;
     }
 
-    private void init_service() {
+    void init_service() {
         try {
             LocateRegistry.createRegistry(this.port);
             Naming.rebind(Constant.SERVER_RMI_ADDRESS + this.port + "/service", this);

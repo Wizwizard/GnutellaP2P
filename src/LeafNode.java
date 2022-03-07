@@ -4,6 +4,7 @@ import java.net.Socket;
 import java.rmi.*;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.server.UnicastRemoteObject;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     int leafId;
@@ -12,6 +13,8 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     String basePath;
     SuperPeerService superPeerService = null;
     int sequenceNumber = 0;
+
+    AtomicInteger currentDownloadingNumber = new AtomicInteger(0);
 
     String logPath;
 
@@ -32,7 +35,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
 
         try {
             leafNodeService = (LeafNodeService) Naming.lookup(
-                    Constant.SERVER_ADDRESS + port_number + "/service"
+                    Constant.SERVER_RMI_ADDRESS + port_number + "/service"
             );
             byte[] content = leafNodeService.obtain(fileName);
             fos = new DataOutputStream(new FileOutputStream((new File(filePath))));
@@ -48,6 +51,13 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
                     e.printStackTrace();
                 }
             }
+        }
+
+        System.out.println("File " + fileName + " on LeafNode-" + leafNodeIP + " has been downloaded in " + this.leafId + " successfully!");
+        int currentNumber = this.currentDownloadingNumber.decrementAndGet();
+        System.out.println("Current download number:" + currentNumber);
+        if(currentNumber == 0) {
+            System.out.println("All Download finished at " + System.currentTimeMillis());
         }
         return 0;
     }
@@ -89,8 +99,9 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     }
 
     private int handle_command(String inputString) {
-        String command = inputString.split(" ")[0];
-        String fileName = inputString.split(" ")[1];
+//        System.out.println("LeafId-" + this.leafId + " receive command " + inputString);
+        String command = inputString.split("-")[0];
+        String fileName = inputString.split("-")[1];
 
         switch (command) {
             case "download":
@@ -98,6 +109,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
                     this.superPeerService.query(
                             String.valueOf(this.leafId) + this.sequenceNumber,
                              String.valueOf(this.leafId), Constant.TTL, fileName);
+                    this.sequenceNumber ++ ;
                 } catch (Exception e) {
                     e.printStackTrace();
                     return -1;
@@ -110,37 +122,65 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
         return 0;
     }
 
-    private void leafNodeRun() {
-        try{
-            this.superPeerService = (SuperPeerService) Naming.lookup(
-                    Constant.SERVER_ADDRESS + this.superPeerPort + "/service"
-            );
-        } catch (Exception e) {
+    private void registerAllFile() throws RemoteException {
+        String dirPath = this.basePath;
+        File dir = new File(dirPath);
+        File[] fileList = dir.listFiles();
+        for ( File file : fileList) {
+            if(file.isFile()) {
+                this.superPeerService.registry(this.leafId, file.getName());
+            }
+        }
+    }
+
+    private void leafNodeRun(String mode) {
+        while(true) {
+            try {
+                this.superPeerService = (SuperPeerService) Naming.lookup(
+                        Constant.SERVER_RMI_ADDRESS + this.superPeerPort + "/service"
+                );
+                break;
+            } catch (NotBoundException e) {
+                System.out.println("Seems that SuperPeer-" + this.superPeerPort + " has not inited! Retrying...");
+            }
+            catch (Exception e) {
+                System.out.println("LeafNode-" + this.leafId + " exception !");
+                e.printStackTrace();
+                return;
+            }
+        }
+
+        try {
+            registerAllFile();
+        } catch (RemoteException e) {
             e.printStackTrace();
             return ;
         }
 
-        String input_string;
-        int returnCode;
+        if(mode.equals("passivity")) {
+            return;
+        } else {
+            String input_string;
+            int returnCode;
 
-        while(true) {
-            System.out.println("Please input your command:");
-            input_string = Constant.scanner.next();
-            returnCode = handle_command(input_string);
-            if (returnCode == 1) {
-                break;
-            } else if (returnCode == -1) {
+            while (true) {
+                System.out.println("Please input your command:");
+                input_string = Constant.scanner.next();
+                returnCode = handle_command(input_string);
+                if (returnCode == 1) {
+                    break;
+                } else if (returnCode == -1) {
 
+                }
             }
         }
 
     }
 
 
-    private void leafNodeStart() {
+    void leafNodeStart(String mode) {
         initService();
-
-        leafNodeRun();
+        leafNodeRun(mode);
     }
 
     private void initService() {
@@ -148,7 +188,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
         try {
             LeafNodeService leafNodeService = this;
             LocateRegistry.createRegistry(port);
-            Naming.rebind(Constant.SERVER_ADDRESS + port + "/service", leafNodeService);
+            Naming.rebind(Constant.SERVER_RMI_ADDRESS + port + "/service", leafNodeService);
             System.out.println("Leaf Node service init, port: " + port);
         } catch (Exception e) {
             e.printStackTrace();
@@ -156,11 +196,11 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     }
 
     public static void main(String args[]) {
-        if(args.length < 1) {
-            System.out.println("Missing parameter SuperPeerPort");
-        }
-
-        int superPeerPort = Integer.parseInt(args[0]);
+//        if(args.length < 1) {
+//            System.out.println("Missing parameter SuperPeerPort");
+//        }
+//
+//        int superPeerPort = Integer.parseInt(args[0]);
 
         // init id & port
         String host = "localhost";
@@ -173,7 +213,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
             try {
                 socket = new Socket(host, port);
                 socket.close();
-            } catch (UnknownHostException | ConnectException e) {
+            } catch (UnknownHostException | java.net.ConnectException e) {
                 // port unused
                 break;
             } catch (IOException e) {
@@ -187,8 +227,9 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
             // define peerId = port - 1 for convenient
             int leafId = port - 1;
             try {
+                int superPeerPort = (leafId-10000+1)/2 + 30000;
                 LeafNode leafNode = new LeafNode(leafId, port, superPeerPort);
-                leafNode.leafNodeStart();
+                leafNode.leafNodeStart("initiative");
             } catch (Exception e) {
                 e.printStackTrace();
             }
