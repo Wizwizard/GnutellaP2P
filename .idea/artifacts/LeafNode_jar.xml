@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="LeafNode:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/LeafNode_jar</output-path>
+    <root id="archive" name="GnutellaP2P.jar">
+      <element id="module-output" name="GnutellaP2P" />
+    </root>
+  </artifact>
+</component>
