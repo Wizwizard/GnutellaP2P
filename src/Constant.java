@@ -24,6 +24,17 @@ public class Constant {
     public static final int PUSH_MODE = 1;
     public static final int PULL_MODE = 2;
     public static final int CURRENT_MODE = PULL_MODE;
+    public static final boolean openRandomUpdate = true;
+    public static final String TESTING_FILE = "j";
+    public static final int ACTIVE_LEAF = 2;
+
+    /*
+    1 debug
+    2 testing
+    3 normal
+     */
+    public static final int RUN_LV = 2;
+
     // ms
     public static final int TTR = 5000;
 

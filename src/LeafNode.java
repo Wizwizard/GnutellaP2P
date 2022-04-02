@@ -4,7 +4,9 @@ import java.net.Socket;
 import java.rmi.*;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.server.UnicastRemoteObject;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -19,11 +21,15 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     int sequenceNumber = 0;
 
     HashMap<String, FileInfo> fileMap = null;
+    List<String> msglist = null;
 
     AtomicInteger currentDownloadingNumber = new AtomicInteger(0);
 
     String logPath;
     int consistencyMode;
+
+    public int numTotalDownload = 0;
+    public int numExpiredDownload = 0;
 
     LeafNode(int leafId, int leafPort, int superPeerPort, int consistencyMode) throws RemoteException {
         super();
@@ -38,6 +44,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
         this.consistencyMode = consistencyMode;
 
         this.sequenceNumber = (new Random()).nextInt(1000);
+        this.msglist = new ArrayList<>();
     }
 
     DownloadFileInfo downloadFile(int port_number, String fileName) {
@@ -97,10 +104,36 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     @Override
     public int queryHit(String messageID, int TTL, String fileName, String leafNodeIP, int port_number) throws RemoteException {
 
+        if(msglist.contains(messageID)) {
+            // discard
+            return 0;
+        }
+
+        msglist.add(messageID);
+
         DownloadFileInfo downloadFileInfo = downloadFile(port_number, fileName);
         if (downloadFileInfo == null) {
             return -1;
         }
+
+        // testing
+        if (Constant.RUN_LV == 2) {
+            int originPort = downloadFileInfo.originServerId + 1;
+            try {
+                LeafNodeService leafNodeService = (LeafNodeService) Naming.lookup(
+                        Constant.SERVER_RMI_ADDRESS + originPort + "/service"
+                );
+                long ret = leafNodeService.poll(fileName, downloadFileInfo.versionNumber);
+                if (ret == -2) {
+                    numExpiredDownload ++;
+                }
+                numTotalDownload ++;
+
+            } catch (NotBoundException | MalformedURLException e) {
+                e.printStackTrace();
+            }
+        }
+
 
         System.out.println("File " + fileName + " on LeafNode-" + leafNodeIP + " has been downloaded in " + this.leafId + " successfully!");
         int currentNumber = this.currentDownloadingNumber.decrementAndGet();
@@ -240,7 +273,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
         }
     }
 
-    private int handle_command(String inputString) {
+    int handle_command(String inputString) {
         System.out.println("LeafId-" + this.leafId + " receive command " + inputString);
         String command = inputString.split("-")[0];
         String fileName = inputString.split("-")[1];
@@ -343,7 +376,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
             return ;
         }
 
-        if(mode.equals("passivity")) {
+        if(!mode.equals("initiative") ) {
             return;
         } else {
             String input_string;
@@ -365,49 +398,63 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
 
     void checkExpirPeriodically() {
         new Thread(()->{
+            while(true) {
+                try {
+                    Thread.sleep(Constant.TTR);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+
+//                System.out.println("Leaf-" + this.leafId + " start to check expired file");
+
+                for(String filename: fileMap.keySet()) {
+                    FileInfo fileInfo = fileMap.get(filename);
+                    // only check downloaded file
+                    LeafNodeService leafNodeService;
+                    if (fileInfo.originServerId != this.leafId) {
+                        long currentTime = System.currentTimeMillis();
+                        // check expired
+                        if (currentTime > (fileInfo.lastMdfdTime + fileInfo.TTR)) {
+                            fileInfo.isValid = false;
+                            System.out.println("Leaf-" + this.leafId + " found file " + filename + " expired due to TTR!");
+                        }
+
+                        // check if version updated
+                        try {
+                            leafNodeService = (LeafNodeService) Naming.lookup(
+                                    Constant.SERVER_RMI_ADDRESS + (fileInfo.originServerId + 1) + "/service"
+                            );
+                            long TTR = leafNodeService.poll(filename, fileInfo.versionNumber);
+                            if(TTR == -1) {
+                                //error retry?
+                            } else if (TTR == -2) {
+                                //expired
+                                fileInfo.isValid = false;
+                                System.out.println("Leaf-" + this.leafId + " found file " + filename + " expired due to version updated!");
+                            } else {
+                                // new TTR
+                                fileInfo.TTR = TTR;
+                            }
+                        } catch (NotBoundException | MalformedURLException | RemoteException e) {
+                            e.printStackTrace();
+                        }
+
+                    }
+                }
+            }
+        }).start();
+    }
+
+    void randomUpdateRoutine() {
+        Random random = new Random();
+        String filename = this.leafId + "j";
+        new Thread(()->{
             try {
-                Thread.sleep(Constant.TTR);
+                Thread.sleep(2000);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
-
-            System.out.println("Leaf-" + this.leafId + " start to check expired file");
-
-            for(String filename: fileMap.keySet()) {
-                FileInfo fileInfo = fileMap.get(filename);
-                // only check downloaded file
-                LeafNodeService leafNodeService;
-                if (fileInfo.originServerId != this.leafId) {
-                    long currentTime = System.currentTimeMillis();
-                    // check expired
-                    if (currentTime > (fileInfo.lastMdfdTime + fileInfo.TTR)) {
-                        fileInfo.isValid = false;
-                        System.out.println("Leaf-" + this.leafId + " found file " + filename + " expired due to TTR!");
-                    }
-
-                    // check if version updated
-                    try {
-                        leafNodeService = (LeafNodeService) Naming.lookup(
-                                Constant.SERVER_RMI_ADDRESS + (fileInfo.originServerId + 1) + "/service"
-                        );
-                        long TTR = leafNodeService.poll(filename, fileInfo.versionNumber);
-                        if(TTR == -1) {
-                            //error retry?
-                        } else if (TTR == -2) {
-                            //expired
-                            fileInfo.isValid = false;
-                            System.out.println("Leaf-" + this.leafId + " found file " + filename + " expired due to version updated!");
-                        } else {
-                            // new TTR
-                            fileInfo.TTR = TTR;
-                        }
-                    } catch (NotBoundException | MalformedURLException | RemoteException e) {
-                        e.printStackTrace();
-                    }
-
-                }
-
-            }
+            update_version(filename);
         }).start();
     }
 
@@ -418,6 +465,9 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
             checkExpirPeriodically();
         }
         leafNodeRun(mode);
+        if(mode.equals("passivity") && Constant.openRandomUpdate) {
+            randomUpdateRoutine();
+        }
     }
 
     private void initService() {

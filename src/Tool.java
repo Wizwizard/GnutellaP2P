@@ -5,10 +5,14 @@ import java.net.MalformedURLException;
 import java.rmi.Naming;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
+import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class Tool {
+
+    static Random random = new Random();
+
     private static void createFile(final String filename, final long sizeInBytes) throws IOException {
         File file = new File(filename);
         file.createNewFile();
@@ -56,7 +60,7 @@ public class Tool {
                 fileName = "" + peerId + filePostfix[i-1];
                 filePath = ownPath + "\\" + fileName;
                 try {
-                    createFile(filePath, i * 1000);
+                    createFile(filePath, i * 10000);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -80,10 +84,36 @@ public class Tool {
     }
 
 
-    public static void main(String args[]) {
-        // generate files with different size for testing
-        batchGenerateFile();
+    public static void PushTesting(int downloadLeafNode) {
+        int numTotalDownload = 100;
 
+        for (int i = 10-downloadLeafNode; i < 10; i ++ ) {
+            int superPeerPort = i + 30000 + 1 ;
+            int leafId = 10000 + 2 * i + 1;
+            new Thread(()->{
+                try {
+                    LeafNode leafNode = new LeafNode(leafId, leafId + 1, superPeerPort, Constant.CURRENT_MODE);
+                    leafNode.leafNodeStart("active");
+                    for(int j = 0; j < numTotalDownload; j ++) {
+                        int k = random.nextInt(10-downloadLeafNode);
+                        String downloadFile = (10000 + 2 * k + 1) + Constant.TESTING_FILE;
+                        leafNode.handle_command("download-" + downloadFile);
+                    }
+                    System.out.println("Leaf-" + leafId + " expired rate: " + ((leafNode.numExpiredDownload * 100.0) / leafNode.numTotalDownload));
+                } catch (RemoteException e) {
+                    e.printStackTrace();
+                }
+            }).start();
+
+        }
+    }
+
+
+
+    public static void main(String args[]) {
+        PushTesting(Constant.ACTIVE_LEAF);
+        // generate files with different size for testing
+//        batchGenerateFile();
         // batch testing of Central Server search service
 //        try {
 //            CentralServerSearchTesting();

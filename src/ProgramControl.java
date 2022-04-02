@@ -1,8 +1,10 @@
 import java.io.*;
+import java.rmi.RemoteException;
+import java.util.Random;
 
 public class ProgramControl {
     public static Runtime runtime = Runtime.getRuntime();
-
+    static Random random = new Random();
 
     public static String consumeInputStream(InputStream is) throws IOException {
         BufferedReader br = new BufferedReader(new InputStreamReader(is, "GBK"));
@@ -31,8 +33,8 @@ public class ProgramControl {
 //        }
 //    }
 
-    public static void initSuperServers() {
-        for(int i = 0; i < 10; i ++) {
+    public static void initSuperServers(int numSuperServer) {
+        for(int i = 0; i < numSuperServer; i ++) {
             int superPeerId = 20000 + 1 + i;
             int port = superPeerId + 10000;
             String neibors = Constant.SUPER_PEER_NEIGHBORS_CONFIG[i];
@@ -52,8 +54,8 @@ public class ProgramControl {
         }
     }
 
-    public static void initLeafNodes() {
-        for(int i = 0; i < 8; i ++) {
+    public static void initLeafNodes(int numPassiveLeaf) {
+        for(int i = 0; i < numPassiveLeaf; i ++) {
             int superPeerPort = i + 30000 + 1 ;
             int leafId = 10000 + 2 * i + 1;
             String logPath = Constant.BASE_DIR + "LeafNodes\\LeafNode-" + leafId + ".log";
@@ -123,14 +125,41 @@ public class ProgramControl {
         }
     }
 
+    public static void PushTesting(int downloadLeafNode) {
+        int numTotalDownload = 100;
 
+        for (int i = 10-downloadLeafNode; i < 10; i ++ ) {
+            int superPeerPort = i + 30000 + 1 ;
+            int leafId = 10000 + 2 * i + 1;
+            new Thread(()->{
+                try {
+                    LeafNode leafNode = new LeafNode(leafId, leafId + 1, superPeerPort, Constant.CURRENT_MODE);
+                    leafNode.leafNodeStart("active");
+                    for(int j = 0; j < numTotalDownload; j ++) {
+                        int k = random.nextInt(10-downloadLeafNode);
+                        String downloadFile = (10000 + 2 * k + 1) + Constant.TESTING_FILE;
+                        leafNode.handle_command("download-" + downloadFile);
+                    }
+                    System.out.println("Leaf-" + leafId + " expired rate: " + ((leafNode.numExpiredDownload * 100.0) / leafNode.numTotalDownload));
+                } catch (RemoteException e) {
+                    e.printStackTrace();
+                }
+            }).start();
 
-
-    public static void main(String args[]) {
-        initSuperServers();
-        initLeafNodes();
+        }
     }
 
 
+    public static void main(String args[]) {
+        int numSuperServers = 10;
+        int numTotalLeaf = 10;
+        int numDownloadLeaf = Constant.ACTIVE_LEAF;
+        int numPassiveLeaf = numTotalLeaf - numDownloadLeaf;
+
+        initSuperServers(numSuperServers);
+        initLeafNodes(numPassiveLeaf);
+
+//        PushTesting(numDownloadLeaf);
+    }
 
 }
