@@ -4,6 +4,8 @@ import java.net.Socket;
 import java.rmi.*;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.server.UnicastRemoteObject;
+import java.util.HashMap;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
@@ -11,38 +13,63 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     int leafPort;
     int superPeerPort;
     String basePath;
+    String ownPath;
+    String downloadPath;
     SuperPeerService superPeerService = null;
     int sequenceNumber = 0;
+
+    HashMap<String, FileInfo> fileMap = null;
 
     AtomicInteger currentDownloadingNumber = new AtomicInteger(0);
 
     String logPath;
+    int consistencyMode;
 
-    LeafNode(int leafId, int leafPort, int superPeerPort) throws RemoteException {
+    LeafNode(int leafId, int leafPort, int superPeerPort, int consistencyMode) throws RemoteException {
         super();
         this.leafId = leafId;
         this.leafPort = leafPort;
         this.superPeerPort = superPeerPort;
         this.basePath = Constant.BASE_DIR + Constant.PEER_NAME + this.leafId + "\\";
+        this.ownPath = this.basePath + Constant.OWN_DIR + "\\";
+        this.downloadPath = this.basePath + Constant.DOWNLOAD_DIR + "\\";
         this.logPath = Constant.BASE_DIR + "LeafNodes\\" + "LeafNode-" + this.leafId + ".log";
+        this.fileMap = new HashMap<>();
+        this.consistencyMode = consistencyMode;
+
+        this.sequenceNumber = (new Random()).nextInt(1000);
     }
 
-    @Override
-    public int queryHit(String messageID, int TTL, String fileName, String leafNodeIP, int port_number) throws RemoteException {
+    DownloadFileInfo downloadFile(int port_number, String fileName) {
         LeafNodeService leafNodeService = null;
         DataOutputStream fos = null;
-        String filePath = basePath + fileName;
+        String filePath = downloadPath + fileName;
+        DownloadFileInfo downloadFileInfo = null;
 
         try {
+            System.out.println("Leaf-" + this.leafId + " try to download file " + fileName + " from port-" + port_number);
             leafNodeService = (LeafNodeService) Naming.lookup(
                     Constant.SERVER_RMI_ADDRESS + port_number + "/service"
             );
-            byte[] content = leafNodeService.obtain(fileName);
+            // how to handle the TTL or version number?
+            downloadFileInfo = leafNodeService.obtain(fileName);
             fos = new DataOutputStream(new FileOutputStream((new File(filePath))));
-            fos.write(content);
+            fos.write(downloadFileInfo.fileData);
+
+            this.superPeerService.registry(this.leafId, fileName);
+            if (fileMap.containsKey(fileName)) {
+                FileInfo fileInfo = fileMap.get(fileName);
+                fileInfo.TTR = downloadFileInfo.TTR;
+                fileInfo.versionNumber = downloadFileInfo.versionNumber;
+                fileInfo.lastMdfdTime = downloadFileInfo.lastMdfdTime;
+                fileInfo.isValid = true;
+            } else {
+                    fileMap.put(fileName, new FileInfo(downloadFileInfo.versionNumber, downloadFileInfo.originServerId,
+                            true, filePath, downloadFileInfo.TTR, downloadFileInfo.lastMdfdTime));
+            }
         } catch (Exception e) {
             e.printStackTrace();
-            return -1;
+            return null;
         } finally {
             if (fos != null) {
                 try {
@@ -51,6 +78,28 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
                     e.printStackTrace();
                 }
             }
+        }
+
+        return downloadFileInfo;
+    }
+
+    int updateFile(String fileName) {
+        FileInfo fileInfo = fileMap.get(fileName);
+        if(!fileInfo.isValid) {
+            if(downloadFile(fileInfo.originServerId+1, fileName) == null) {
+                // error
+                return -1;
+            }
+        }
+        return  0;
+    }
+
+    @Override
+    public int queryHit(String messageID, int TTL, String fileName, String leafNodeIP, int port_number) throws RemoteException {
+
+        DownloadFileInfo downloadFileInfo = downloadFile(port_number, fileName);
+        if (downloadFileInfo == null) {
+            return -1;
         }
 
         System.out.println("File " + fileName + " on LeafNode-" + leafNodeIP + " has been downloaded in " + this.leafId + " successfully!");
@@ -63,13 +112,49 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     }
 
     @Override
-    public byte[] obtain(String fileName) throws RemoteException {
+    public DownloadFileInfo obtain(String fileName) throws RemoteException {
         // illegal check
         if (fileName == null || fileName.equals("")) {
             throw new RemoteException("Illegal fileName!");
         }
 
-        String filePath = this.basePath + fileName;
+        FileInfo fileInfo = fileMap.get(fileName);
+        String filePath = fileInfo.filePath;
+        DownloadFileInfo downloadFileInfo = null;
+
+
+        // Push mode
+        // only check valid flag
+        if (fileInfo.originServerId != this.leafId) {
+            if (this.consistencyMode == Constant.PUSH_MODE) {
+                if (!fileInfo.isValid) {
+
+                    downloadFileInfo = downloadFile(fileInfo.originServerId + 1, fileName);
+                    if(downloadFileInfo == null) {
+                        System.out.println("update file failed");
+                        return null;
+                    }
+//                fileInfo.isValid = true;
+//                fileInfo.versionNumber = downloadFileInfo.versionNumber;
+//                fileInfo.lastMdfdTime = downloadFileInfo.lastMdfdTime;
+//                fileInfo.TTR = downloadFileInfo.TTR;
+                }
+            } else {
+                // pull mode
+                // check if TTR expired
+                long currentTime = System.currentTimeMillis();
+
+                if (!fileInfo.isValid || currentTime > (fileInfo.TTR + fileInfo.lastMdfdTime)) {
+                    downloadFileInfo = downloadFile(fileInfo.originServerId + 1, fileName);
+//                fileInfo.isValid = true;
+//                fileInfo.lastMdfdTime = downloadFileInfo.lastMdfdTime;
+//                fileInfo.TTR = downloadFileInfo.TTR;
+//                fileInfo.versionNumber = downloadFileInfo.versionNumber;
+                }
+            }
+        }
+
+
         File file = new File(filePath);
         if (!file.exists()) {
             throw new RemoteException("Remote Server leaf-" + this.leafId + " doesn't has file " + fileName);
@@ -82,7 +167,14 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
             bis = new BufferedInputStream(new FileInputStream(file));
             bis.read(content);
 //            downloadTimes ++;
-            return content;
+            long currentTime = System.currentTimeMillis();
+            long TTR = fileInfo.TTR;
+            // PULL mode && own this file
+            // refresh the TTR
+            if (consistencyMode == Constant.PULL_MODE && fileInfo.originServerId == this.leafId) {
+                TTR = currentTime + Constant.TTR - fileInfo.lastMdfdTime;
+            }
+            return (new DownloadFileInfo(fileInfo.originServerId, TTR, fileInfo.lastMdfdTime, fileInfo.versionNumber, content));
         } catch (Exception e) {
             e.printStackTrace();
             return null;
@@ -98,8 +190,58 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
         }
     }
 
+    @Override
+    public int invalidation(String msgId, int serverId, String filename, int versionNumber) throws RemoteException {
+        /*
+        1. mark status to invalid
+        2. then register the index
+        3. lazy mode: only download when need to use
+         */
+        System.out.println("Leaf-" + this.leafId + " receive invalidation file:" + filename +
+                " orginalServerId:" + serverId + " versionNumber:" + versionNumber);
+
+        if(!fileMap.containsKey(filename)) {
+            // no this file?
+            System.out.println(this.leafId + " receive invalidation but don't have this file " + filename);
+            return -2;
+        }
+
+        FileInfo fileInfo = fileMap.get(filename);
+        if (fileInfo.versionNumber != versionNumber) {
+            fileInfo.isValid = false;
+            fileInfo.versionNumber = versionNumber;
+            fileInfo.originServerId = serverId;
+            System.out.println("leaf-" + this.leafId + " receive file " +
+                    filename + " with versionNumber " + versionNumber + " invalidation and set invalid");
+        }
+
+        // re-registry
+        // to-do check success
+        superPeerService.registry(this.leafId, filename);
+
+        return 0;
+    }
+
+    @Override
+    public long poll(String filename, int versionNumber) throws RemoteException {
+        FileInfo fileInfo = fileMap.get(filename);
+        if (fileInfo == null) {
+            System.out.println("file " + filename + "not exist on server " + this.leafId);
+            // no such file
+            return -1;
+        }
+
+        if (fileInfo.versionNumber == versionNumber) {
+            long newTTR = System.currentTimeMillis() + Constant.TTR - fileInfo.lastMdfdTime;
+            return newTTR;
+        } else {
+            // invalid
+            return -2;
+        }
+    }
+
     private int handle_command(String inputString) {
-//        System.out.println("LeafId-" + this.leafId + " receive command " + inputString);
+        System.out.println("LeafId-" + this.leafId + " receive command " + inputString);
         String command = inputString.split("-")[0];
         String fileName = inputString.split("-")[1];
 
@@ -109,10 +251,23 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
                     this.superPeerService.query(
                             String.valueOf(this.leafId) + this.sequenceNumber,
                              String.valueOf(this.leafId), Constant.TTL, fileName);
+                    System.out.println("LeafId-" + this.leafId + " query for file " + fileName);
                     this.sequenceNumber ++ ;
                 } catch (Exception e) {
                     e.printStackTrace();
                     return -1;
+                }
+                break;
+            case "update":
+                // update version
+                update_version(fileName);
+                break;
+            case "refresh":
+                int ret = updateFile(fileName);
+                if(ret == -1) {
+                    System.out.println(this.leafId + " encountered issue when update file " + fileName);
+                } else {
+                    System.out.println(this.leafId + " updated file " + fileName + " successfully!");
                 }
                 break;
             default:
@@ -123,14 +278,44 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
     }
 
     private void registerAllFile() throws RemoteException {
-        String dirPath = this.basePath;
+        String dirPath = this.ownPath;
         File dir = new File(dirPath);
         File[] fileList = dir.listFiles();
+        FileInfo fileInfo = null;
         for ( File file : fileList) {
             if(file.isFile()) {
+                // init
+                int versionNumber = 0;
+                int originalServerId = this.leafId;
+                boolean isValid = true;
+                String filePath = file.getPath();
+                fileInfo = new FileInfo(versionNumber, originalServerId, isValid, filePath);
+                // name can't be same
+                fileMap.put(file.getName(), fileInfo);
+
                 this.superPeerService.registry(this.leafId, file.getName());
+                System.out.println("Leaf-" + this.leafId + " registered file " + file.getName() + " on superPeerPort-" + this.superPeerPort);
             }
         }
+
+    }
+
+    void update_version(String filename) {
+        FileInfo fileInfo = fileMap.get(filename);
+        fileInfo.lastMdfdTime = System.currentTimeMillis();
+        fileInfo.versionNumber += 1;
+
+        String msgId = this.leafId + "" + filename + "" + fileInfo.versionNumber;
+
+        // only push mode to broadcast invalidation
+        if (consistencyMode == Constant.PUSH_MODE) {
+            try {
+                superPeerService.invalidation(msgId, this.leafId, filename, fileInfo.versionNumber);
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
+        }
+
     }
 
     private void leafNodeRun(String mode) {
@@ -139,6 +324,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
                 this.superPeerService = (SuperPeerService) Naming.lookup(
                         Constant.SERVER_RMI_ADDRESS + this.superPeerPort + "/service"
                 );
+                System.out.println("Leaf-" + this.leafId + " successfully connected to superPeerPort-" + this.superPeerPort);
                 break;
             } catch (NotBoundException e) {
                 System.out.println("Seems that SuperPeer-" + this.superPeerPort + " has not inited! Retrying...");
@@ -177,9 +363,60 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
 
     }
 
+    void checkExpirPeriodically() {
+        new Thread(()->{
+            try {
+                Thread.sleep(Constant.TTR);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+            System.out.println("Leaf-" + this.leafId + " start to check expired file");
+
+            for(String filename: fileMap.keySet()) {
+                FileInfo fileInfo = fileMap.get(filename);
+                // only check downloaded file
+                LeafNodeService leafNodeService;
+                if (fileInfo.originServerId != this.leafId) {
+                    long currentTime = System.currentTimeMillis();
+                    // check expired
+                    if (currentTime > (fileInfo.lastMdfdTime + fileInfo.TTR)) {
+                        fileInfo.isValid = false;
+                        System.out.println("Leaf-" + this.leafId + " found file " + filename + " expired due to TTR!");
+                    }
+
+                    // check if version updated
+                    try {
+                        leafNodeService = (LeafNodeService) Naming.lookup(
+                                Constant.SERVER_RMI_ADDRESS + (fileInfo.originServerId + 1) + "/service"
+                        );
+                        long TTR = leafNodeService.poll(filename, fileInfo.versionNumber);
+                        if(TTR == -1) {
+                            //error retry?
+                        } else if (TTR == -2) {
+                            //expired
+                            fileInfo.isValid = false;
+                            System.out.println("Leaf-" + this.leafId + " found file " + filename + " expired due to version updated!");
+                        } else {
+                            // new TTR
+                            fileInfo.TTR = TTR;
+                        }
+                    } catch (NotBoundException | MalformedURLException | RemoteException e) {
+                        e.printStackTrace();
+                    }
+
+                }
+
+            }
+        }).start();
+    }
+
 
     void leafNodeStart(String mode) {
         initService();
+        if(this.consistencyMode == Constant.PULL_MODE) {
+            checkExpirPeriodically();
+        }
         leafNodeRun(mode);
     }
 
@@ -228,7 +465,7 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
             int leafId = port - 1;
             try {
                 int superPeerPort = (leafId-10000+1)/2 + 30000;
-                LeafNode leafNode = new LeafNode(leafId, port, superPeerPort);
+                LeafNode leafNode = new LeafNode(leafId, port, superPeerPort, Constant.CURRENT_MODE);
                 leafNode.leafNodeStart("initiative");
             } catch (Exception e) {
                 e.printStackTrace();
@@ -237,3 +474,27 @@ public class LeafNode extends UnicastRemoteObject implements LeafNodeService {
         }
     }
 }
+
+class FileInfo {
+    int versionNumber;
+    int originServerId;
+    boolean isValid;
+    String filePath;
+    long TTR;
+    long lastMdfdTime;
+
+    FileInfo(int versionNumber, int originServerId, boolean isValid, String filePath) {
+        this(versionNumber, originServerId, isValid, filePath, 0, 0);
+    }
+
+    FileInfo(int versionNumber, int originServerId, boolean isValid, String filePath, long TTR, long lastMdfdTime) {
+        this.versionNumber = versionNumber;
+        this.originServerId = originServerId;
+        this.isValid = isValid;
+        this.filePath = filePath;
+        this.TTR = TTR;
+        this.lastMdfdTime = lastMdfdTime;
+    }
+}
+
+

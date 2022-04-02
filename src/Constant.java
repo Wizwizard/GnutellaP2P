@@ -21,11 +21,19 @@ public class Constant {
             "3-4-8", "4-5-9", "6-9-10", "7-8-10", "8-9"
     };
 
+    public static final int PUSH_MODE = 1;
+    public static final int PULL_MODE = 2;
+    public static final int CURRENT_MODE = PULL_MODE;
+    // ms
+    public static final int TTR = 5000;
+
     // Base
     public static final String BASE_DIR = (new File("")).getAbsolutePath() + "\\static\\";
     public static final int MAX_DISTANCE = 99999999;
     public static final String PEER_NAME = "Leaf";
     public static final String SERVER_NAME = "SuperPeer";
+    public static final String OWN_DIR = "own";
+    public static final String DOWNLOAD_DIR = "download";
 
     // Thread
     public static final int PEER_MIN_THREAD = 2;

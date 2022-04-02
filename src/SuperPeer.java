@@ -1,4 +1,6 @@
+import java.net.MalformedURLException;
 import java.rmi.Naming;
+import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.server.UnicastRemoteObject;
@@ -7,8 +9,12 @@ import java.util.HashMap;
 import java.util.List;
 
 public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
+    // neighborPort = neighborId + 10000
+    // peerPort = peerId + 1
+
     List<Integer> neighborSuperPeerList;
     HashMap<String, String> messagePairMap;
+    // filename, peerId list
     HashMap<String, List<Integer>> fileIndexMap;
     int superPeerId;
     int port;
@@ -45,7 +51,6 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
         // Success
         return 0;
     }
-
 
 
     /*
@@ -156,6 +161,62 @@ public class SuperPeer extends UnicastRemoteObject implements SuperPeerService{
             // exception
             return -1;
         }
+        return 0;
+    }
+
+    @Override
+    public int invalidation(String msgId, int serverId, String filename, int versionNumber) throws RemoteException {
+        if (messagePairMap.containsKey(msgId)) {
+            // discard
+            return -1;
+        }
+
+        // mark msg
+        messagePairMap.put(msgId, String.valueOf(serverId));
+
+        LeafNodeService leafNodeService = null;
+        if (fileIndexMap.containsKey(filename)) {
+            // remove the filename index
+
+            List<Integer> serverList = fileIndexMap.get(filename);
+            fileIndexMap.remove(filename);
+            if(serverList != null) {
+                for (Integer sId : serverList) {
+                    int port = sId + 1;
+                    // call client invalidate
+                    try {
+                        leafNodeService = (LeafNodeService) Naming.lookup(
+                                Constant.SERVER_RMI_ADDRESS + port + "/service");
+                        System.out.println("Superpeer-" + this.superPeerId + " send invalidation to peer-" + sId);
+                        leafNodeService.invalidation(msgId, serverId, filename, versionNumber);
+                    } catch (NotBoundException | MalformedURLException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+
+        SuperPeerService superPeerService = null;
+        for (Integer neighborPort: neighborSuperPeerList) {
+//            int neighborPort = neighborId + 10000;
+            // broadcast neighbors invalidate
+            try {
+                superPeerService = (SuperPeerService) Naming.lookup(
+                        Constant.SERVER_RMI_ADDRESS + neighborPort + "/service");
+                System.out.println("Superpeer-" + this.superPeerId + " receive invalidation " + filename +
+                        " with versionNumber " + versionNumber +
+                        " from server " + serverId +
+                        " then broadcast to server " + (neighborPort-10000));
+
+                superPeerService.invalidation(msgId, serverId, filename, versionNumber);
+
+            } catch (RemoteException | NotBoundException | MalformedURLException e) {
+                e.printStackTrace();
+                System.out.println("Superpeer-" + this.superPeerId + " broadcast invalidation to server " + (neighborPort-10000) + " failed!");
+            }
+        }
+
+        // success
         return 0;
     }
 

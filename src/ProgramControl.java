@@ -53,7 +53,7 @@ public class ProgramControl {
     }
 
     public static void initLeafNodes() {
-        for(int i = 0; i < 9; i ++) {
+        for(int i = 0; i < 8; i ++) {
             int superPeerPort = i + 30000 + 1 ;
             int leafId = 10000 + 2 * i + 1;
             String logPath = Constant.BASE_DIR + "LeafNodes\\LeafNode-" + leafId + ".log";
@@ -63,7 +63,7 @@ public class ProgramControl {
 
             new Thread(() -> {
                 try {
-                    (new LeafNode(leafId, leafId+1, superPeerPort)).leafNodeStart("passivity");
+                    (new LeafNode(leafId, leafId+1, superPeerPort, Constant.CURRENT_MODE)).leafNodeStart("passivity");
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
